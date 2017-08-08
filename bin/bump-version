@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# Bump the patch version (http://semver.org/), tag and push
+
+VERSION=$(php -r '$settings = json_decode(file_get_contents("composer.json")); echo $settings->version;')
+PATCH_VERSION=$(git tag | grep v$VERSION | sort -r -V | head -n 1 | awk -F . '{print $3}')
+test -n "$PATCH_VERSION" || PATCH_VERSION=-1;
+let PATCH_VERSION++
+sed -i 's/"version"\s*:\s*"'${VERSION}'"/"version": "'${VERSION}.${PATCH_VERSION}'"/' composer.json
+git add composer.json
+git commit -m "Bump version to v${VERSION}.${PATCH_VERSION}"
+git tag "v${VERSION}.${PATCH_VERSION}"
+git push origin "v${VERSION}.${PATCH_VERSION}"
+

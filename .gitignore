@@ -1,0 +1,8 @@
+/tmp
+/vendor
+/cache
+
+/tests/_output/
+/tests/*/*Tester.php
+/tests/_support/_generated
+/nbproject

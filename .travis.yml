@@ -1,0 +1,30 @@
+language: php
+php: 5.5
+sudo: false
+
+before_install:
+# Configure Git
+- git config --global user.email "travis-ci@legalthings.net"
+- git config --global user.name "Travis CI"
+
+# Configure composer
+- test -z "$GITHUB_TOKEN" || composer config -g github-oauth.github.com "$GITHUB_TOKEN"
+
+# Get all tags of git repo
+- git fetch origin 'refs/tags/*:refs/tags/*'
+
+install:
+# Install composer packages
+- composer install
+
+before_script:
+# Generate codecept build classes
+- php bin/codecept build
+
+script:
+# Run tests
+- php bin/codecept run
+
+after_success:
+# Bump version
+- test "$TRAVIS_BRANCH" != 'master' -o "$TRAVIS_PULL_REQUEST" != "false" || test -n "$(git tag --contains)" || bin/bump-version
