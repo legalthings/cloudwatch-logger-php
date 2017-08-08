@@ -1,7 +1,6 @@
 {
     "name": "legalthings/cloudwatch-logger-php",
     "description": "CloudWatch logger for PHP",
-    "version": "1.0.0",
     "license": "MIT",
     "require": {
         "php": ">=5.5.0",
