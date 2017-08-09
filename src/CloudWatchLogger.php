@@ -6,6 +6,7 @@ use Aws\CloudWatchLogs\CloudWatchLogsClient as Client;
 use Maxbanton\Cwh\Handler\CloudWatch as Handler;
 use Monolog\Formatter\LineFormatter as Formatter;
 use Monolog\Logger;
+use InvalidArgumentException;
 
 /**
  * Class that facilitates CloudWatch logging
