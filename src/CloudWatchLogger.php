@@ -2,11 +2,8 @@
 
 namespace LegalThings;
 
-use Aws\CloudWatchLogs\CloudWatchLogsClient as Client;
-use Maxbanton\Cwh\Handler\CloudWatch as Handler;
-use Monolog\Formatter\LineFormatter as Formatter;
-use Monolog\Logger;
 use InvalidArgumentException;
+use Aws\Result;
 
 /**
  * Class that facilitates CloudWatch logging
@@ -19,53 +16,40 @@ class CloudWatchLogger
     public $config;
     
     /**
-     * @var Logger
+     * @var CloudWatchClient
      */
-    public $logger;
+    public $client;
     
     
     /**
      * Class constructor
      * 
-     * @param object|array $config
-     * @param Logger       $logger
+     * @param object|array     $config
+     * @param CloudWatchClient $client
      */
-    public function __construct($config, $logger = null)
+    public function __construct($config, $client = null)
     {
         $this->config = (object)$config;
         
-        $this->logger = $logger ?: $this->createLogger($this->config);
+        $this->client = $client ?: $this->create($this->config);
     }
     
     /**
-     * Create a logger
+     * Create a client
      * 
      * @param object $config
      * 
-     * @return Logger $logger
+     * @return CloudWatchClient
      */
-    protected function createLogger($config)
+    protected function create($config)
     {
+        if (isset($config->instance_name)) {
+            $config->stream_name = $config->instance_name; // for bc
+        }
+        
         $this->validateConfig($config);
         
-        $client = new Client((array)$config->aws);
-        
-        $group = $config->group_name;
-        $instance = $config->instance_name;
-        $channel = isset($config->channel_name) ? $config->channel_name : null;
-        $retention = isset($config->retention_days) ? $config->retention_days : 90;
-        $batch = isset($config->batch_size) ? $config->batch_size : 10000;
-        $tags = isset($config->tags) ? $config->tags : [];
-        $format = isset($config->format) ? $config->format : Formatter::SIMPLE_FORMAT;
-        
-        $handler = new Handler($client, $group, $instance, $retention, $batch, $tags);
-        $formatter = new Formatter($format, null, false, true);
-        $handler->setFormatter($formatter);
-        
-        $logger = new Logger($channel);
-        $logger->pushHandler($handler);
-        
-        return $logger;
+        return new CloudWatchClient($config);
     }
     
     /**
@@ -83,64 +67,29 @@ class CloudWatchLogger
             throw new InvalidArgumentException('CloudWatchLogger config \'group_name\' not given');
         }
         
-        if (!isset($config->instance_name)) {
-            throw new InvalidArgumentException('CloudWatchLogger config \'instance_name\' not given');
+        if (!isset($config->stream_name)) {
+            throw new InvalidArgumentException('CloudWatchLogger config \'stream_name\' not given');
         }
     }
     
     
     /**
-     * Log info to CloudWatch
+     * Log data to CloudWatch
      * 
-     * @param string $text
-     * @param mixed  $data
-     */
-    public function info($text, $data = [])
-    {
-        $this->logger->info($text, $data);
-    }
-    
-    /**
-     * Log notices to CloudWatch
+     * @param string|array|object $data
      * 
-     * @param string $text
-     * @param mixed  $data
+     * @return Result
      */
-    public function notice($text, $data = [])
+    public function log($data)
     {
-        $this->logger->notice($text, $data);
-    }
-    
-    /**
-     * Log warnings to CloudWatch
-     * 
-     * @param string $text
-     * @param mixed  $data
-     */
-    public function warn($text, $data = [])
-    {
-        $this->logger->warn($text, $data);
-    }
-
-    /**
-     * Log errors to CloudWatch
-     * 
-     * @param string $text
-     * @param mixed  $data
-     */
-    public function error($text, $data = [])
-    {
-        $this->logger->error($text, $data);
-    }
-    
-    /**
-     * Log debug to CloudWatch
-     * 
-     * @param string $text
-     * @param mixed  $data
-     */
-    public function debug($text, $data = [])
-    {
-        $this->logger->debug($text, $data);
+        try {
+            $result = $this->client->log($data, $this->config->group_name, $this->config->stream_name);
+            return $result;
+        } catch (\Exception $e) {
+            // @todo handle errors
+            throw $e;
+//            $message = $e->getMessage();
+//            $e;
+        }
     }
 }
