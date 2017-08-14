@@ -3,6 +3,7 @@
 namespace LegalThings;
 
 use InvalidArgumentException;
+use Aws\CloudWatchLogs\Exception\CloudWatchLogsException;
 use Aws\CloudWatchLogs\CloudWatchLogsClient as Client;
 use Aws\Result;
 
@@ -59,24 +60,24 @@ class CloudWatchClient
     protected function validateConfig($config)
     {
         if (!isset($config->aws)) {
-            throw new InvalidArgumentException('CloudWatchLogger config \'aws\' not given');
+            throw new InvalidArgumentException("CloudWatchClient config 'aws' not given");
         }
     }
     
     
     /**
-     * Simple interface to log data in CloudWatch
+     * Log data in CloudWatch
      * Will automatically create missing groups and streams as needed
      * This is the recommended function to log data as it keeps track of sequence tokens
      * 
      * @param string|array|object $data
      * @param string              $group
      * @param string              $stream
-     * @param array               $options ['retention_days' => 90]
+     * @param array|object        $options ['retention_days' => 90]
      * 
      * @return Result
      */
-    public function log($data, $group, $stream, $options = [])
+    public function log($data, $group, $stream, $options = null)
     {
         if (!isset($this->sequence_token)) {
             $created = $this->createGroupAndStream($group, $stream, $options);
@@ -88,11 +89,19 @@ class CloudWatchClient
         $message = $data;
         
         if (is_array($data) || is_object($data)) {
+            // can only log strings to CloudWatch
             $message = json_encode((array)$data);
         }
         
         $events = [['message' => $message, 'timestamp' => time() * 1000]];
-        $result = $this->putLogEvents($events, $group, $stream, $this->sequence_token);
+        
+        try {
+            $result = $this->putLogEvents($events, $group, $stream, $this->sequence_token);
+        } catch (CloudWatchLogsException $e) {
+            // something went wrong, invalidate sequence token so we can fetch the actual token from aws on subsequent calls
+            $this->sequence_token = null;
+            throw $e;
+        }
         
         $this->sequence_token = $result->get('nextSequenceToken');
         
@@ -100,22 +109,22 @@ class CloudWatchClient
     }
     
     /**
-     * Create group and stream if it didn't exist
+     * Create group and stream if they didn't exist yet
      * 
      * @param string              $group
      * @param string              $stream
-     * @param array               $options ['retention_days' => 90]
+     * @param object              $options ['retention_days' => 90]
      * 
      * @return array              ['stream' => array|null, 'group' => array|null]
      */
-    protected function createGroupAndStream($group, $stream, $options = [])
-    {
+    protected function createGroupAndStream($group, $stream, $options = null)
+    {       
         $existingGroup = $this->getLogGroup($group);
         
         if (!isset($existingGroup)) {
             $this->createLogGroup($group);
 
-            $retention = isset($options['retention_days']) ? $options['retention_days'] : null;
+            $retention = isset($options) && isset($options->retention_days) ? $options->retention_days : null;
             $this->putRetentionPolicy($group, $retention);
         }
 

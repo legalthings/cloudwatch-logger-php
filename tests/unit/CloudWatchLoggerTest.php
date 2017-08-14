@@ -3,6 +3,7 @@
 namespace LegalThings;
 
 use Codeception\TestCase\Test;
+use Aws\CloudWatchLogs\Exception\CloudWatchLogsException;
 
 /**
  * Tests for CloudWatchLogger class
@@ -23,7 +24,12 @@ class CloudWatchLoggerTest extends Test
                 ]
             ],
             'group_name' => 'group_name',
-            'instance_name' => 'instance_name'
+            'stream_name' => 'stream_name',
+            'options' => [
+                'retention_days' => 90,
+                'error_max_retry' => 3,
+                'error_retry_delay' => 0
+            ]
         ];
     }
     
@@ -31,22 +37,55 @@ class CloudWatchLoggerTest extends Test
     public function testConstruct()
     {
         $config = $this->getConfig();
+        
         $logger = new CloudWatchLogger($config);
         
-        $expectedConfig = $config + ['stream_name' => 'instance_name']; // for bc
-        $this->assertEquals((object)$expectedConfig, $logger->config);
+        $expected = (object)$config;
+        $expected->options = (object)$expected->options;
+        $this->assertEquals($expected, $logger->config);
         
         $this->assertInstanceOf(CloudWatchClient::class, $logger->client);
     }
     
+    
     public function testLog()
     {
         $config = $this->getConfig();
+        $data = ['foo' => 'bar', 'number' => 10, 'flagged' => false];
         
-        $logger = new CloudWatchLogger($config);
+        $client = $this->getMockBuilder(CloudWatchClient::class)
+            ->disableOriginalConstructor()->setMethods(['log'])->getMock();
         
-        $logger->log(['foo' => 'bar', 'number' => 10, 'flagged' => false]);
+        $client->expects($this->once())->method('log')->with(
+            $data,
+            $config['group_name'],
+            $config['stream_name'],
+            (object)$config['options']
+        );
         
-        // @todo: fix up tests
+        $logger = new CloudWatchLogger($config, $client);
+        
+        $logger->log($data);
+    }
+    
+    /**
+     * @expectedException Aws\CloudWatchLogs\Exception\CloudWatchLogsException
+     */
+    public function testLogRetryOnError()
+    {
+        $config = $this->getConfig();
+        $data = ['foo' => 'bar', 'number' => 10, 'flagged' => false];
+        
+        $exception = $this->getMockBuilder(CloudWatchLogsException::class)
+            ->disableOriginalConstructor()->setMethods(['getAwsErrorCode'])->getMock();
+        $exception->expects($this->exactly(4))->method('getAwsErrorCode')->willReturn('InvalidSequenceTokenException');
+        
+        $client = $this->getMockBuilder(CloudWatchClient::class)
+            ->disableOriginalConstructor()->setMethods(['log'])->getMock();
+        $client->expects($this->exactly(4))->method('log')->willThrowException($exception);
+        
+        $logger = new CloudWatchLogger($config, $client);
+        
+        $logger->log($data);
     }
 }

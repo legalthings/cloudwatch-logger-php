@@ -78,7 +78,16 @@ $logger->log(['hello' => 'world']);
     // required
     'stream_name' => 'stream_name',
 
-    // optional, defaults to 90
-    'retention_days' => 3
+    // optional
+    'options' => [
+        // defaults to infinite
+        'retention_days' => 7,
+
+        // retry logging when receiving error (invalid token sequence exception), defaults to 5
+        'error_max_retry' => 3,
+
+        // delay to wait for before retrying logging in microseconds, defaults to 100000 microseconds (0.1 seconds)
+        'error_retry_delay' => 0
+    ]
 ]
 ```
