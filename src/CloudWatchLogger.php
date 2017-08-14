@@ -2,14 +2,12 @@
 
 namespace LegalThings;
 
-use Aws\CloudWatchLogs\CloudWatchLogsClient as Client;
-use Maxbanton\Cwh\Handler\CloudWatch as Handler;
-use Monolog\Formatter\LineFormatter as Formatter;
-use Monolog\Logger;
 use InvalidArgumentException;
+use Aws\CloudWatchLogs\Exception\CloudWatchLogsException;
+use Aws\Result;
 
 /**
- * Class that facilitates CloudWatch logging
+ * Class that simplifies CloudWatch logging through configuration and a simple interface
  */
 class CloudWatchLogger
 {
@@ -19,53 +17,41 @@ class CloudWatchLogger
     public $config;
     
     /**
-     * @var Logger
+     * @var CloudWatchClient
      */
-    public $logger;
+    public $client;
     
     
     /**
      * Class constructor
      * 
-     * @param object|array $config
-     * @param Logger       $logger
+     * @param object|array     $config
+     * @param CloudWatchClient $client
      */
-    public function __construct($config, $logger = null)
+    public function __construct($config, $client = null)
     {
         $this->config = (object)$config;
+        $this->config->options = isset($this->config->options) ? (object)$this->config->options : (object)[];
         
-        $this->logger = $logger ?: $this->createLogger($this->config);
+        $this->client = $client ?: $this->create($this->config);
     }
     
     /**
-     * Create a logger
+     * Create a client
      * 
      * @param object $config
      * 
-     * @return Logger $logger
+     * @return CloudWatchClient
      */
-    protected function createLogger($config)
+    protected function create($config)
     {
+        if (isset($config->instance_name)) {
+            $config->stream_name = $config->instance_name; // for bc
+        }
+        
         $this->validateConfig($config);
         
-        $client = new Client((array)$config->aws);
-        
-        $group = $config->group_name;
-        $instance = $config->instance_name;
-        $channel = isset($config->channel_name) ? $config->channel_name : null;
-        $retention = isset($config->retention_days) ? $config->retention_days : 90;
-        $batch = isset($config->batch_size) ? $config->batch_size : 10000;
-        $tags = isset($config->tags) ? $config->tags : [];
-        $format = isset($config->format) ? $config->format : Formatter::SIMPLE_FORMAT;
-        
-        $handler = new Handler($client, $group, $instance, $retention, $batch, $tags);
-        $formatter = new Formatter($format, null, false, true);
-        $handler->setFormatter($formatter);
-        
-        $logger = new Logger($channel);
-        $logger->pushHandler($handler);
-        
-        return $logger;
+        return new CloudWatchClient($config);
     }
     
     /**
@@ -76,71 +62,71 @@ class CloudWatchLogger
     protected function validateConfig($config)
     {
         if (!isset($config->aws)) {
-            throw new InvalidArgumentException('CloudWatchLogger config \'aws\' not given');
+            throw new InvalidArgumentException("CloudWatchLogger config 'aws' not given");
         }
         
         if (!isset($config->group_name)) {
-            throw new InvalidArgumentException('CloudWatchLogger config \'group_name\' not given');
+            throw new InvalidArgumentException("CloudWatchLogger config 'group_name' not given");
         }
         
-        if (!isset($config->instance_name)) {
-            throw new InvalidArgumentException('CloudWatchLogger config \'instance_name\' not given');
+        if (!isset($config->stream_name)) {
+            throw new InvalidArgumentException("CloudWatchLogger config 'stream_name' not given");
         }
     }
     
     
     /**
-     * Log info to CloudWatch
+     * Log data to CloudWatch
      * 
-     * @param string $text
-     * @param mixed  $data
+     * @param string|array|object $data
+     * 
+     * @return Result
      */
-    public function info($text, $data = [])
+    public function log($data)
     {
-        $this->logger->info($text, $data);
+        try {
+            $result = $this->client->log($data, $this->config->group_name, $this->config->stream_name, $this->config->options);
+            return $result;
+        } catch (CloudWatchLogsException $e) {
+            return $this->retryLoggingAfterError($e, $data);
+        }
     }
     
     /**
-     * Log notices to CloudWatch
+     * Retry logging after getting an error, for example invalid sequence token message
+     * CloudWatch handles concurrent/simultaneous requests poorly
+     * It will throw an exception when the sequence token fetched doesn't match the one its currently at on AWS
+     * This can happen when multiple applications need to log and there is no specific order in which this happens
+     * To solve this somewhat we retry logging afer fetching a new sequence token, for a limited amount of times
      * 
-     * @param string $text
-     * @param mixed  $data
-     */
-    public function notice($text, $data = [])
-    {
-        $this->logger->notice($text, $data);
-    }
-    
-    /**
-     * Log warnings to CloudWatch
+     * @param CloudWatchLogsException $error
+     * @param string|array|object     $data
+     * @param int                     $iteration
      * 
-     * @param string $text
-     * @param mixed  $data
+     * @return Result
      */
-    public function warn($text, $data = [])
+    protected function retryLoggingAfterError($error, $data, $iteration = 0)
     {
-        $this->logger->warn($text, $data);
-    }
-
-    /**
-     * Log errors to CloudWatch
-     * 
-     * @param string $text
-     * @param mixed  $data
-     */
-    public function error($text, $data = [])
-    {
-        $this->logger->error($text, $data);
-    }
-    
-    /**
-     * Log debug to CloudWatch
-     * 
-     * @param string $text
-     * @param mixed  $data
-     */
-    public function debug($text, $data = [])
-    {
-        $this->logger->debug($text, $data);
+        if ($error->getAwsErrorCode() !== 'InvalidSequenceTokenException') {
+            // we currently only retry after getting invalid sequence token exception
+            throw $error;
+        }
+        
+        $maxRetry = isset($this->config->options->error_max_retry) ? $this->config->options->error_max_retry : 5;
+        $retryDelay = isset($this->config->options->error_retry_delay) ? $this->config->options->error_retry_delay : 100000;
+        
+        if ($iteration >= $maxRetry) {
+            throw $error;
+        }
+        
+        try {
+            usleep($retryDelay); // delay before logging (if configured) to give other apps a chance to log before retrying
+            $result = $this->client->log($data, $this->config->group_name, $this->config->stream_name, $this->config->options);
+            return $result;
+        } catch (CloudWatchLogsException $e) {
+            return $this->retryLoggingAfterError($e, $data, ++$iteration);
+        }
+        
+        throw $error;
     }
 }

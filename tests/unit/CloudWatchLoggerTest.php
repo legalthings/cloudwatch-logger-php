@@ -3,8 +3,7 @@
 namespace LegalThings;
 
 use Codeception\TestCase\Test;
-use Maxbanton\Cwh\Handler\CloudWatch as CloudWatchHandler;
-use Monolog\Logger;
+use Aws\CloudWatchLogs\Exception\CloudWatchLogsException;
 
 /**
  * Tests for CloudWatchLogger class
@@ -25,8 +24,12 @@ class CloudWatchLoggerTest extends Test
                 ]
             ],
             'group_name' => 'group_name',
-            'instance_name' => 'instance_name',
-            'channel_name' => 'channel_name'
+            'stream_name' => 'stream_name',
+            'options' => [
+                'retention_days' => 90,
+                'error_max_retry' => 3,
+                'error_retry_delay' => 0
+            ]
         ];
     }
     
@@ -34,35 +37,55 @@ class CloudWatchLoggerTest extends Test
     public function testConstruct()
     {
         $config = $this->getConfig();
+        
         $logger = new CloudWatchLogger($config);
         
-        $this->assertEquals((object)$config, $logger->config);
-        $this->assertInstanceOf(Logger::class, $logger->logger);
+        $expected = (object)$config;
+        $expected->options = (object)$expected->options;
+        $this->assertEquals($expected, $logger->config);
         
-        $handlers = $logger->logger->getHandlers();
-        $this->assertInstanceOf(CloudWatchHandler::class, $handlers[0]);
+        $this->assertInstanceOf(CloudWatchClient::class, $logger->client);
     }
+    
     
     public function testLog()
     {
         $config = $this->getConfig();
+        $data = ['foo' => 'bar', 'number' => 10, 'flagged' => false];
         
-        $monolog = $this->getMockBuilder(Logger::class)
-                ->setMethods(['info', 'notice', 'warn', 'error', 'debug'])
-                ->disableOriginalConstructor()
-                ->getMock();
-        $monolog->expects($this->once())->method('info')->with('test_info', ['hello' => 'world']);
-        $monolog->expects($this->once())->method('notice')->with('test_notice', ['foo' => 'bar']);
-        $monolog->expects($this->once())->method('warn')->with('test_warn', ['flag' => true]);
-        $monolog->expects($this->once())->method('error')->with('test_error', ['line' => 111]);
-        $monolog->expects($this->once())->method('debug')->with('test_debug', ['debugging' => false]);
+        $client = $this->getMockBuilder(CloudWatchClient::class)
+            ->disableOriginalConstructor()->setMethods(['log'])->getMock();
         
-        $logger = new CloudWatchLogger($config, $monolog);
+        $client->expects($this->once())->method('log')->with(
+            $data,
+            $config['group_name'],
+            $config['stream_name'],
+            (object)$config['options']
+        );
         
-        $logger->info('test_info', ['hello' => 'world']);
-        $logger->notice('test_notice', ['foo' => 'bar']);
-        $logger->warn('test_warn', ['flag' => true]);
-        $logger->error('test_error', ['line' => 111]);
-        $logger->debug('test_debug', ['debugging' => false]);
+        $logger = new CloudWatchLogger($config, $client);
+        
+        $logger->log($data);
+    }
+    
+    /**
+     * @expectedException Aws\CloudWatchLogs\Exception\CloudWatchLogsException
+     */
+    public function testLogRetryOnError()
+    {
+        $config = $this->getConfig();
+        $data = ['foo' => 'bar', 'number' => 10, 'flagged' => false];
+        
+        $exception = $this->getMockBuilder(CloudWatchLogsException::class)
+            ->disableOriginalConstructor()->setMethods(['getAwsErrorCode'])->getMock();
+        $exception->expects($this->exactly(4))->method('getAwsErrorCode')->willReturn('InvalidSequenceTokenException');
+        
+        $client = $this->getMockBuilder(CloudWatchClient::class)
+            ->disableOriginalConstructor()->setMethods(['log'])->getMock();
+        $client->expects($this->exactly(4))->method('log')->willThrowException($exception);
+        
+        $logger = new CloudWatchLogger($config, $client);
+        
+        $logger->log($data);
     }
 }

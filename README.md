@@ -37,26 +37,19 @@ $config = [
         ]
     ],
     'group_name' => 'group_name',
-    'instance_name' => 'instance_name',
-    'channel_name' => 'channel_name'
+    'stream_name' => 'stream_name'
 ];
 
 $logger = new CloudWatchLogger($config);
 
-$logger->info('test_info', ['hello' => 'world']);
+$logger->log(['hello' => 'world']);
 /*
-  outputs within the group 'group_name' and instance 'instance_name' on CloudWatch:
-  
-  [2017-08-08 13:23:44] channel_name.INFO: my_notice
+  outputs within the group 'group_name' and instance 'stream_name' on CloudWatch:
+
    {
       "hello": "world"
    }
 */
-
-$logger->notice('test_notice', ['foo' => 'bar']);
-$logger->warn('test_warn', ['flag' => true]);
-$logger->error('test_error', ['line' => 111]);
-$logger->debug('test_debug', ['debugging' => false]);
 ```
 
 
@@ -83,23 +76,18 @@ $logger->debug('test_debug', ['debugging' => false]);
     'group_name' => 'group_name',
 
     // required
-    'instance_name' => 'instance_name',
+    'stream_name' => 'stream_name',
 
     // optional
-    'channel_name' => 'channel_name',
+    'options' => [
+        // defaults to infinite
+        'retention_days' => 7,
 
-    // optional, defaults to 90
-    'retention_days' => 3,
+        // retry logging when receiving error (invalid token sequence exception), defaults to 5
+        'error_max_retry' => 3,
 
-    // optional, defaults to 10000 and may not be greater than 10000
-    'batch_size' => 5000,
-
-    // optional
-    'tags' => [
-        'application' => 'php-test-app-1'
-    ],
-
-    // optional, defaults to '[%datetime%] %channel%.%level_name%: %message% %context% %extra%\n'
-    'format' => '[%datetime%] %message% %context%\n'
+        // delay to wait for before retrying logging in microseconds, defaults to 100000 microseconds (0.1 seconds)
+        'error_retry_delay' => 0
+    ]
 ]
 ```
